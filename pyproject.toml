@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "summerrise-echo"
+version = "0.1.0"
+description = "Expressive AI voice dubbing where each character keeps their own voice."
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.10"
+authors = [{ name = "Summer Rise Studios", email = "jampanikomal@summerrise.studio" }]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+# The speech models. Install PyTorch for your GPU first (see README), then this.
+speech = [
+  "chatterbox-tts==0.1.7",
+  "demucs>=4.0.1",
+  "soundfile>=0.12",
+  "librosa>=0.10",
+  "accelerate>=0.30",
+]
+claude = ["anthropic>=2.0"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+echo-dub = "echo.cli:main"
+
+[project.urls]
+Homepage = "https://www.summerrise.studio"
+Source = "https://github.com/summerrise-studios/echo"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
