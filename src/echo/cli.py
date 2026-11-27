@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--transcript", type=Path, help="an .srt of the original lines, to skip speech recognition")
     p.add_argument("--speakers", type=int, help="number of speakers, if you know it")
     p.add_argument("--no-separate", action="store_true", help="the file is clean speech: skip music separation")
-    p.add_argument("--llm", default="auto", help="claude, ollama or auto (default)")
+    p.add_argument("--llm", default="auto", help="claude, gemini, ollama or auto (default)")
     p.add_argument("--model", help="language model name for the chosen backend")
     p.add_argument("--rounds", type=int, default=2, help="translation revise rounds (default 2)")
     p.add_argument("--rate", type=float, default=5.0, help="dub voice syllables per second, for the first draft (default 5.0)")

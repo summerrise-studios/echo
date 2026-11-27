@@ -69,6 +69,7 @@ Useful options:
 | `--speakers 2` | the number of speakers, if you know it |
 | `--no-separate` | the file is clean speech with no music: skip separation |
 | `--from hi` | another spoken language (Whisper large-v3 turbo is used outside Telugu) |
+| `--llm gemini` | translate with Gemini (set `GEMINI_API_KEY`) |
 | `--llm ollama` | translate with a local model instead of Claude |
 | `--resume` | reuse finished stages and re-voice an edited `segments.json` |
 
@@ -79,7 +80,7 @@ Useful options:
 | Music and effects apart from the voice | [Demucs](https://github.com/facebookresearch/demucs) htdemucs | MIT |
 | Telugu speech recognition | [BuzzASR/telugu](https://huggingface.co/BuzzASR/telugu), a Whisper large-v3 fine-tune | MIT |
 | Telling voices apart, cloning them | [Chatterbox](https://github.com/resemble-ai/chatterbox) by Resemble AI | MIT |
-| Translation and emotion | Claude Opus 5.5 (default when configured) or a local model through [Ollama](https://ollama.com) | |
+| Translation and emotion | Claude Opus 5.5 (default when configured), Gemini (`--llm gemini` with `GEMINI_API_KEY`), or a local model through [Ollama](https://ollama.com) | |
 
 Only one model holds the GPU at a time, so the whole dub runs on a 6 GB laptop
 GPU. We chose Chatterbox over XTTS-v2, F5-TTS and Fish Speech because its
@@ -104,7 +105,7 @@ Perth watermark, which marks the audio as AI-generated; Echo keeps it.
   are not carried over yet.
 - Lips are not re-synced; the dub fits each line's timing, not the mouth.
 - Translation quality depends on the language model. Small local models know
-  little Telugu; use Claude for dubs you mean to keep, and have a fluent
+  little Telugu; use Claude or Gemini for dubs you mean to keep, and have a fluent
   speaker review `report.html`.
 
 ## Status

@@ -1,18 +1,21 @@
 """Language-model backends that return JSON matching a schema.
 
-Two backends, one interface (``LLM.json``):
+Three backends, one interface (``LLM.json``):
 
 - ``claude``: the Claude API through the official ``anthropic`` SDK
   (``pip install "<package>[claude]"``). Uses Claude Opus 5.5 with adaptive
   thinking and structured outputs, so the reply always parses. Credentials
   come from the usual places: ``ANTHROPIC_API_KEY``, ``ANTHROPIC_AUTH_TOKEN``
   or an ``ant auth login`` profile.
+- ``gemini``: Google's Gemini API over HTTP with the standard library only,
+  using structured output. The key comes from ``GEMINI_API_KEY`` (or
+  ``GOOGLE_API_KEY``); the free tier is enough to try the loop.
 - ``ollama``: a local model served by Ollama (https://ollama.com), called over
   its HTTP API with the standard library only. Free and offline, weaker than
   Claude, good for trying the loop on a laptop.
 
-``pick("auto")`` uses Claude when credentials are configured and falls back to
-Ollama when a server is reachable.
+``pick("auto")`` uses Claude when credentials are configured, then Gemini when
+a key is set, then Ollama when a server is reachable.
 
 This file is shared, unchanged, by Svara, Echo and Frame.
 """
@@ -26,7 +29,11 @@ import urllib.request
 from dataclasses import dataclass, field
 
 CLAUDE_MODEL = os.environ.get("SUMMERRISE_CLAUDE_MODEL", "claude-opus-5-5")
+GEMINI_MODEL = os.environ.get("SUMMERRISE_GEMINI_MODEL", "gemini-3.5-flash")
 OLLAMA_MODEL = os.environ.get("SUMMERRISE_OLLAMA_MODEL", "qwen3:8b")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+
 def _ollama_url(raw: str) -> str:
     """OLLAMA_HOST is often the server's bind address ("0.0.0.0:11434"); make it a URL."""
     raw = (raw or "127.0.0.1:11434").strip().rstrip("/")
@@ -109,6 +116,74 @@ class ClaudeLLM(LLM):
             raise LLMError("Claude ran out of output room; try a shorter input")
         text = next((b.text for b in message.content if b.type == "text"), "")
         return _parse(text)
+
+@dataclass
+class GeminiLLM(LLM):
+    name: str = "gemini"
+    model: str = GEMINI_MODEL
+    temperature: float = 0.4
+    timeout: float = 600.0
+    retries: int = 4  # Gemini answers 503 or 429 when busy; wait and try again
+
+    def json(self, system: str, prompt: str, schema: dict) -> dict:
+        import time
+        key = gemini_key()
+        if not key:
+            raise LLMError("the Gemini backend needs GEMINI_API_KEY")
+        self.calls += 1
+        body = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": self.temperature,
+                "responseMimeType": "application/json",
+                "responseJsonSchema": schema,
+            },
+        }
+        req = urllib.request.Request(
+            GEMINI_URL.format(model=self.model),
+            data=json.dumps(body).encode("utf-8"),
+            # The key goes in a header, never in the URL.
+            headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        )
+        for attempt in range(self.retries + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")
+                busy = e.code == 503 or (e.code == 429 and "PerDay" not in detail)
+                if busy and attempt < self.retries:
+                    time.sleep(min(60, 5 * 2 ** attempt))
+                    continue
+                if e.code == 429:
+                    raise LLMError(f"Gemini quota used up for {self.model}; try another model or later") from e
+                if e.code in (401, 403):
+                    raise LLMError("Gemini API: the key was rejected") from e
+                raise LLMError(f"Gemini error {e.code}: {_gemini_message(detail)}") from e
+            except TimeoutError as e:
+                raise LLMError(f"Gemini did not answer within {self.timeout:g} s") from e
+            except (urllib.error.URLError, OSError) as e:
+                raise LLMError(f"Gemini API: could not connect ({e})") from e
+        cands = data.get("candidates") or []
+        if not cands:
+            reason = data.get("promptFeedback", {}).get("blockReason", "no answer")
+            raise LLMError(f"Gemini returned nothing ({reason})")
+        finish = cands[0].get("finishReason", "STOP")
+        if finish == "MAX_TOKENS":
+            raise LLMError("Gemini ran out of output room; try a shorter input")
+        if finish not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
+            raise LLMError(f"Gemini stopped early ({finish})")
+        parts = cands[0].get("content", {}).get("parts", [])
+        return _parse("".join(p.get("text", "") for p in parts if not p.get("thought")))
+
+
+def _gemini_message(detail: str) -> str:
+    try:
+        return json.loads(detail)["error"]["message"][:300]
+    except (ValueError, KeyError, TypeError):
+        return detail[:300]
 
 
 @dataclass
@@ -195,6 +270,10 @@ def claude_configured() -> bool:
     return os.path.isdir(os.path.join(home, ".config", "anthropic"))
 
 
+def gemini_key() -> str:
+    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+
+
 def ollama_available(host: str = OLLAMA_HOST) -> bool:
     try:
         with urllib.request.urlopen(_ollama_url(host) + "/api/tags", timeout=3) as resp:
@@ -204,21 +283,25 @@ def ollama_available(host: str = OLLAMA_HOST) -> bool:
 
 
 def pick(name: str = "auto", model: str | None = None, **kw) -> LLM:
-    """Return a backend by name: ``claude``, ``ollama`` or ``auto``."""
+    """Return a backend by name: ``claude``, ``gemini``, ``ollama`` or ``auto``."""
     name = (name or "auto").lower()
     if name == "auto":
         if claude_configured():
             name = "claude"
+        elif gemini_key():
+            name = "gemini"
         elif ollama_available(kw.get("host", OLLAMA_HOST)):
             name = "ollama"
         else:
             raise LLMError(
-                "no language model available: set ANTHROPIC_API_KEY for Claude, "
-                "or install Ollama and run `ollama pull qwen3:8b`"
+                "no language model available: set ANTHROPIC_API_KEY for Claude or "
+                "GEMINI_API_KEY for Gemini, or install Ollama and run `ollama pull qwen3:8b`"
             )
     if name == "claude":
         return ClaudeLLM(model=model or CLAUDE_MODEL, **{k: v for k, v in kw.items() if k in ("effort",)})
+    if name == "gemini":
+        return GeminiLLM(model=model or GEMINI_MODEL, **{k: v for k, v in kw.items() if k in ("temperature", "timeout")})
     if name == "ollama":
         allowed = ("host", "think", "temperature", "num_ctx", "timeout", "keep_alive")
         return OllamaLLM(model=model or OLLAMA_MODEL, **{k: v for k, v in kw.items() if k in allowed})
-    raise LLMError(f"unknown backend {name!r}; use claude, ollama or auto")
+    raise LLMError(f"unknown backend {name!r}; use claude, gemini, ollama or auto")
